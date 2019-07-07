@@ -39,10 +39,10 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         # Pin bank configuration
         self.AddParam("Banks", "banks", self.uInteger, 3)
         self.AddParam("Banks", "pins per bank", self.uInteger, 60)
+        self.AddParam("Banks", "differential", self.uInteger, 0)
+        self.AddParam("Banks", "spacing", self.uMM, 20.0)
         self.AddParam("Banks", "width", self.uMM, 16.4)
         self.AddParam("Banks", "height", self.uMM, 3.9)
-        self.AddParam("Banks", "spacing", self.uMM, 20.0)
-        self.AddParam("Banks", "differential", self.uInteger, 0)
         # Signal pad parameters
         self.AddParam("Signal Pads", "pitch", self.uMM, 0.5)
         self.AddParam("Signal Pads", "width", self.uMM, 0.305)
@@ -176,65 +176,78 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
             self.module.Add(hole)
             
         # Fab
-        fab_height = self.parameters["Layout"]["connector height"] / 2
-        fab_bank_height = self.parameters["Banks"]["height"]
+        bank_width = self.parameters["Banks"]["width"]
+        bank_height = self.parameters["Banks"]["height"]
         silk_offset = self.parameters["Layout"]["silkscreen offset"]
         silk_grid = pcbnew.ToMM(silk_offset)
-                           
+
+        fab_width = banks * bank_x
+        if variant == "Socket":
+            fab_width = fab_width + pcbnew.FromMM(1.27)
+        leftEdge = -fab_width / 2
+        fab_height = self.parameters["Layout"]["connector height"] / 2
+        chamfer = 2*fab_height / 3
+        
         # Configure F.Fab layer
         self.draw.SetLineThickness(pcbnew.FromMM(0.1)) # Default per KLC F5.2
         self.draw.SetLayer(pcbnew.F_Fab)
-                           
-        # Draw Bank cutouts
+                                       
+        # Draw connector outline
+        if variant == "Terminal":
+            points = [(0, -fab_height),
+                      (leftEdge, -fab_height),
+                      (leftEdge, fab_height - chamfer),
+                      (leftEdge + chamfer, fab_height),
+                      (0, fab_height)]
+            self.draw.Polyline(points, mirrorX = 0)
+            # Pin 1 marker
+            self.draw.MarkerArrow(pin1.x, -fab_height+pitch/2, self.draw.dirS, pitch)
+        elif variant == "Socket":
+            # Outline
+            self.draw.Box(0, 0, fab_width, 2*fab_height)
+            # Chamfers
+            points = [(leftEdge, -fab_height + chamfer),
+                      (leftEdge + chamfer, -fab_height)]
+            self.draw.Polyline(points, mirrorX = 0)
+            # Pin 1 marker
+            self.draw.MarkerArrow(pin1.x, fab_height-pitch/2, self.draw.dirN, pitch)
+        
+        # Draw bank outlines
         for b in range(0,banks):
             mid = pcbnew.wxPoint(bank1_mid + b*bank_x, 0)
-            # Bank cutout
-            self.draw.Box(mid.x, mid.y, 2*gnd_space_out, fab_bank_height)
-                           
-        # Draw connector outline
-        leftEdge = -banks*bank_x/2
-        chamfer_x = bank1_mid - gnd_space_out
-        chamfer = chamfer_x - leftEdge
-        fabEndPoints = [(0, -fab_height),
-                        (leftEdge, -fab_height),
-                        (leftEdge, fab_height - chamfer),
-                        (chamfer_x, fab_height),
-                        (0, fab_height)]
-        self.draw.Polyline(fabEndPoints, mirrorX = 0)
-
-        # Pin 1 marker
-        self.draw.MarkerArrow(pin1.x, -fab_height+pitch/2, self.draw.dirS, pitch)
-
+            self.draw.Box(mid.x, mid.y, bank_width, bank_height)
+        
         # Configure F.SilkS layer
         self.draw.SetLineThickness(pcbnew.FromMM(0.12)) # KLC5.1, per IPC-7351C
         self.draw.SetLayer(pcbnew.F_SilkS)
         
         # Draw silkscreen outline
-        silkEdge = [(pin1.x - pad_width - silk_offset, pin1.y - silk_offset - pad_height/3),
-                    (pin1.x - pad_width - silk_offset, pin1.y - silk_offset),
-                    (leftEdge - silk_offset, pin1.y - silk_offset),
-                    (leftEdge - silk_offset, fab_height - chamfer),
-                    (chamfer_x, fab_height + silk_offset),
-                    (pin1.x - pad_width - silk_offset, fab_height + silk_offset)]
-        silkEdge_grid = []
-        for point in silkEdge:
-            silkEdge_grid.append((pcbnew.PutOnGridMM(point[0], silk_grid),
-                                  pcbnew.PutOnGridMM(point[1], silk_grid)))
-
-        self.draw.Polyline(silkEdge_grid[0:2]) # Draw Pin 1 indicator
-        self.draw.Polyline(silkEdge_grid[1:], mirrorX = 0) # Draw connector outline
-        # Draw side outlines between banks
-        silk_x = bank1_mid - silkEdge_grid[0][0]
-        silk_y = silkEdge_grid[-1][1]
-        for b in range(0,banks-1):
-            mid = bank1_mid + b*bank_x
-            x0 = mid + silk_x
-            x1 = mid + bank_x/2
-            x2 = x1 - x0
-            silkOutline = [(x0, silk_y),
-                           (x1+x2, silk_y)]
-            self.draw.Polyline(silkOutline, mirrorY = 0)
-            
+        #if variant == "Terminal":
+        #    silkEnds = [(pin1.x - pad_width - silk_offset, pin1.y - silk_offset - pad_height/3),
+        #            (pin1.x - pad_width - silk_offset, pin1.y - silk_offset),
+        #                (leftEdge - silk_offset, pin1.y - silk_offset),
+        #                (leftEdge - silk_offset, fab_height - chamfer),
+        #                (chamfer_x, fab_height + silk_offset),
+        #                (pin1.x - pad_width - silk_offset, fab_height + silk_offset)]
+        #    silkEnds_grid = []
+        #    for point in silkEdge:
+        #        silkEdge_grid.append((pcbnew.PutOnGridMM(point[0], silk_grid),
+        #                              pcbnew.PutOnGridMM(point[1], silk_grid)))
+        #
+        #self.draw.Polyline(silkEdge_grid[0:2]) # Draw Pin 1 indicator
+        #self.draw.Polyline(silkEdge_grid[1:], mirrorX = 0) # Draw connector outline
+        ## Draw side outlines between banks
+        #silk_x = bank1_mid - silkEdge_grid[0][0]
+        #silk_y = silkEdge_grid[-1][1]
+        #for b in range(0,banks-1):
+        #    mid = bank1_mid + b*bank_x
+        #    x0 = mid + silk_x
+        #    x1 = mid + bank_x/2
+        #    x2 = x1 - x0
+        #    silkOutline = [(x0, silk_y),
+        #                   (x1+x2, silk_y)]
+        #    self.draw.Polyline(silkOutline, mirrorY = 0)
+        
         # Configure courtyard layer
         self.draw.SetLayer(pcbnew.F_CrtYd)
         self.draw.SetLineThickness(pcbnew.FromMM(0.05))
