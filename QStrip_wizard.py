@@ -16,7 +16,10 @@
 
 from __future__ import division
 import math
+import copy
 import pcbnew
+from pcbnew import wxPoint
+from pcbnew import wxSize
 
 import FootprintWizardBase
 
@@ -80,14 +83,14 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
             # NPTH
             pad.SetAttribute(pcbnew.PAD_ATTRIB_HOLE_NOT_PLATED)
             pad.SetLayerSet(pad.UnplatedHoleMask())
-            pad.SetSize(pcbnew.wxSize(dia,dia))
-            pad.SetDrillSize(pcbnew.wxSize(dia,dia))
+            pad.SetSize(wxSize(dia,dia))
+            pad.SetDrillSize(wxSize(dia,dia))
         else:
             # PTH
             pad.SetAttribute(pcbnew.PAD_ATTRIB_STANDARD)
             pad.SetLayerSet(pad.StandardMask())
-            pad.SetSize(pcbnew.wxSize(ring_dia,ring_dia))
-            pad.SetDrillSize(pcbnew.wxSize(dia,dia))
+            pad.SetSize(wxSize(ring_dia,ring_dia))
+            pad.SetDrillSize(wxSize(dia,dia))
         pad.SetPos0(pos)
         pad.SetPosition(pos)
         pad.SetName(name)
@@ -97,6 +100,10 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         pass
     
     def BuildThisFootprint(self):
+        def putOnGridMM(point, grid):
+            return (pcbnew.PutOnGridMM(point[0], grid),
+                    pcbnew.PutOnGridMM(point[1], grid))
+        
         variant = self.parameters["Layout"]["variant"]
         
         # Banks
@@ -105,36 +112,41 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         bank_x = self.parameters["Banks"]["spacing"]
         pins_per_bank = self.parameters["Banks"]["pins per bank"]
 
+        ########################################################################
+        # Copper layer(s)
+        
         # Get signal pad parameters
         pitch      = self.parameters["Signal Pads"]["pitch"]
         pad_width  = self.parameters["Signal Pads"]["width"]
         pad_height = self.parameters["Signal Pads"]["height"]
         pad_y = self.parameters["Signal Pads"]["y offset"]
-        pad_size = pcbnew.wxSize(pad_width, pad_height)
+        pad_size = wxSize(pad_width, pad_height)
         
         # Pin 1 position
-        pin1 = pcbnew.wxPoint(0,0)
+        pin1 = wxPoint(0,0)
         pin1.x = int(-(pins_per_bank / 4)*pitch + pitch/2 - ((banks-1) / 2)*bank_x)
         if variant == "Terminal":
             pin1.y = -pad_y
         elif variant == "Socket":
             pin1.y = pad_y
         
-        
         # Bank 1 center point
         bank1_mid = pin1.x - pitch/2 + (pins_per_bank / 4)*pitch
-        
+
         # Place signal pads
         n = 1 # Pin counter
+        pin = [] # Pin positions, ordered by bank
         for b in range(0, banks):
+            pin.append([])
             for p in range(0, pins_per_bank):
                 # Compute next pad location
-                pos = pcbnew.wxPoint(pin1.x + (p // 2)*pitch + b*bank_x,
+                pos = wxPoint(pin1.x + (p // 2)*pitch + b*bank_x,
                                      pin1.y - (p  % 2)*(2*pin1.y))
                 if b < diff and ((p+1) % 6 == 0 or (p+2) % 6 == 0):
                     # Place gaps between differential pairs
                     continue
                 else:
+                    pin[b].append(pos) # Add position to list
                     # Create pad (both single-ended and differential)
                     pad = self.smdRectPad(self.module, str(n), pad_size, pos)
                     self.module.Add(pad)
@@ -147,52 +159,50 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         gnd_space_in  = self.parameters["Ground Pads"]["spacing (inner)"] / 2
         gnd_space_out = self.parameters["Ground Pads"]["spacing (outer)"] / 2
         gnd_space = [-gnd_space_out, -gnd_space_in, gnd_space_in, gnd_space_out]
-        gnd_size  = [pcbnew.wxSize(gnd_width_out, gnd_height),
-                     pcbnew.wxSize(gnd_width_in, gnd_height),
-                     pcbnew.wxSize(gnd_width_in, gnd_height),
-                     pcbnew.wxSize(gnd_width_out, gnd_height)]
+        gnd_size  = [wxSize(gnd_width_out, gnd_height),
+                     wxSize(gnd_width_in, gnd_height),
+                     wxSize(gnd_width_in, gnd_height),
+                     wxSize(gnd_width_out, gnd_height)]
         
         # Place ground plane pads
         for b in range(banks):
             mid = bank1_mid + b*bank_x # Bank midpoint
             for i in range(len(gnd_space)):
-                pos = pcbnew.wxPoint(mid + gnd_space[i], 0)
+                pos = wxPoint(mid + gnd_space[i], 0)
                 pad = self.smdRectPad(self.module, str(n), gnd_size[i], pos)
                 self.module.Add(pad)
                 n = n + 1
-                           
-        # Hole parameters
+
+        ########################################################################
+        # Holes
         hole_dia  = self.parameters["Holes"]["drill diameter"]
         hole_ring = self.parameters["Holes"]["pad diameter"]
-        hole_offset = pcbnew.wxPoint(self.parameters["Holes"]["x offset"],
-                                     self.parameters["Holes"]["y offset"])
+        hole_offset = wxPoint(self.parameters["Holes"]["x offset"],
+                              self.parameters["Holes"]["y offset"])
         if variant == "Terminal":
             hole_offset.y = -hole_offset.y
-
+        
         # Place holes
         for m in (-1,1):
-            pos = pcbnew.wxPoint(m*(pin1.x-hole_offset.x), hole_offset.y)
+            pos = wxPoint(m*(pin1.x-hole_offset.x), hole_offset.y)
             hole = self.holePad(self.module, "", hole_dia, hole_ring, pos)
             self.module.Add(hole)
-            
-        # Fab
-        bank_width = self.parameters["Banks"]["width"]
-        bank_height = self.parameters["Banks"]["height"]
-        silk_offset = self.parameters["Layout"]["silkscreen offset"]
-        silk_grid = pcbnew.ToMM(silk_offset)
 
-        fab_width = banks * bank_x
-        if variant == "Socket":
-            fab_width = fab_width + pcbnew.FromMM(1.27)
-        leftEdge = -fab_width / 2
-        fab_height = self.parameters["Layout"]["connector height"] / 2
-        chamfer = 2*fab_height / 3
-        
-        # Configure F.Fab layer
+        ########################################################################
+        # Fabrication (F.Fab) layer
         self.draw.SetLineThickness(pcbnew.FromMM(0.1)) # Default per KLC F5.2
         self.draw.SetLayer(pcbnew.F_Fab)
                                        
         # Draw connector outline
+        fab_width = banks * bank_x
+        if variant == "Socket":
+            # Sockets are 1.27mm wider in all relevant Q Strip datasheets
+            fab_width = fab_width + pcbnew.FromMM(1.27)
+        
+        leftEdge = -fab_width / 2
+        fab_height = self.parameters["Layout"]["connector height"] / 2
+        chamfer = 2*fab_height / 4 # 1/4 connector height, cosmetic only
+        
         if variant == "Terminal":
             points = [(0, -fab_height),
                       (leftEdge, -fab_height),
@@ -213,45 +223,70 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
             self.draw.MarkerArrow(pin1.x, fab_height-pitch/2, self.draw.dirN, pitch)
         
         # Draw bank outlines
+        bank_height = self.parameters["Banks"]["height"]
+        bank_width = 2*gnd_space_out # Approximate, ok for cosmetic purposes
         for b in range(0,banks):
-            mid = pcbnew.wxPoint(bank1_mid + b*bank_x, 0)
+            mid = wxPoint(bank1_mid + b*bank_x, 0)
             self.draw.Box(mid.x, mid.y, bank_width, bank_height)
-        
-        # Configure F.SilkS layer
+
+        ########################################################################
+        # Silkscreen (F.SilkS) layer
         self.draw.SetLineThickness(pcbnew.FromMM(0.12)) # KLC5.1, per IPC-7351C
         self.draw.SetLayer(pcbnew.F_SilkS)
         
-        # Draw silkscreen outline
-        #if variant == "Terminal":
-        #    silkEnds = [(pin1.x - pad_width - silk_offset, pin1.y - silk_offset - pad_height/3),
-        #            (pin1.x - pad_width - silk_offset, pin1.y - silk_offset),
-        #                (leftEdge - silk_offset, pin1.y - silk_offset),
-        #                (leftEdge - silk_offset, fab_height - chamfer),
-        #                (chamfer_x, fab_height + silk_offset),
-        #                (pin1.x - pad_width - silk_offset, fab_height + silk_offset)]
-        #    silkEnds_grid = []
-        #    for point in silkEdge:
-        #        silkEdge_grid.append((pcbnew.PutOnGridMM(point[0], silk_grid),
-        #                              pcbnew.PutOnGridMM(point[1], silk_grid)))
-        #
-        #self.draw.Polyline(silkEdge_grid[0:2]) # Draw Pin 1 indicator
-        #self.draw.Polyline(silkEdge_grid[1:], mirrorX = 0) # Draw connector outline
-        ## Draw side outlines between banks
-        #silk_x = bank1_mid - silkEdge_grid[0][0]
-        #silk_y = silkEdge_grid[-1][1]
-        #for b in range(0,banks-1):
-        #    mid = bank1_mid + b*bank_x
-        #    x0 = mid + silk_x
-        #    x1 = mid + bank_x/2
-        #    x2 = x1 - x0
-        #    silkOutline = [(x0, silk_y),
-        #                   (x1+x2, silk_y)]
-        #    self.draw.Polyline(silkOutline, mirrorY = 0)
+        # Silkscreen parameters
+        silk_offset = self.parameters["Layout"]["silkscreen offset"]
+        silk_grid = pcbnew.ToMM(silk_offset)
+        silk_height = fab_height + silk_offset
+        silk_leftEdge = leftEdge - silk_offset
+        silk_pin = int(pad_width/2 + silk_offset)
+        silk_pin1 = pin1.x - pad_width/2 - silk_offset
         
-        # Configure courtyard layer
+        silkEndL = []
+        silkEndR = []
+        if variant == "Terminal":
+            silkEndL = [wxPoint(silk_pin1, pin1.y - pad_height/2), # Pin 1 mark
+                        wxPoint(silk_pin1, -silk_height),
+                        wxPoint(silk_leftEdge, -silk_height),
+                        wxPoint(silk_leftEdge, silk_height-chamfer),
+                        wxPoint(silk_leftEdge+chamfer, silk_height),
+                        wxPoint(silk_pin1, silk_height)]
+        elif variant == "Socket":
+            silkEndL = [wxPoint(silk_pin1, pin1.y + pad_height/2) # Pin 1 mark
+                        wxPoint(silk_pin1, silk_height),
+                        wxPoint(silk_leftEdge, silk_height),
+                        wxPoint(silk_leftEdge, -silk_height),
+                        wxPoint(silk_pin1, -silk_height)]
+        
+        # Generate right endpoints:
+        # Deep copy and mirror left endpoints about X axis, skip the first point
+        for p in silkEndL[1:]:
+            silkEndR.append(wxPoint(-p.x, p.y))
+        
+        # Define x offset from the last pin:
+        # End outlines do not mirror perfectly in differential banks
+        silkEndR[0].x = pin[-1][-1].x + silk_pin
+        silkEndR[-1].x = pin[-1][-1].x + silk_pin
+        
+        # Draw silkscreen end outlines
+        self.draw.Polyline(silkEndL)
+        self.draw.Polyline(silkEndR)
+        
+        # Draw silkscreen outline along sides between banks
+        for b in range(0,banks-1):
+            # Last pin in current bank
+            x0 = pin[b][-1].x + pad_width/2 + silk_offset
+            # First pin in next bank
+            x1 = pin[b+1][0].x - pad_width/2 - silk_offset
+            # Draw
+            for y in (-silk_height, silk_height):
+                self.draw.Line(x0, y, x1, y)
+
+        ########################################################################
+        # Courtyard        
         self.draw.SetLayer(pcbnew.F_CrtYd)
         self.draw.SetLineThickness(pcbnew.FromMM(0.05))
-
+        
         # Draw courtyard
         #crtyd_width = self.parameters["Layout"]["courtyard width"]
         #crtyd_height = self.parameters["Layout"]["courtyard height"]
