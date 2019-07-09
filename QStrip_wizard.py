@@ -98,6 +98,27 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         pad.SetPosition(pos)
         pad.SetName(name)
         return pad
+
+    def OpenMarkerArrow(self, x, y, direction, width=pcbnew.FromMM(1)):
+        """!
+        Draw an open marker arrow facing in the given direction, with the
+        point at (x,y).
+        
+        @param x: x position of the arrow tip
+        @param y: y position of the arrow tip
+        @param direction: arrow direction in degrees (0 is "north", can use
+        dir* shorthands)
+        @param width: arrow width
+        """
+        self.draw.TransformTranslate(x, y)
+        self.draw.TransformRotationOrigin(direction)
+
+        pts = [(-width/2, width/2),
+               (0,0),
+               (width/2,  width/2)]
+        
+        self.draw.Polyline(pts)
+        self.draw.PopTransform(2)
     
     def CheckParameters(self):
         pass
@@ -211,7 +232,7 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
                       (0, fab_height)]
             self.draw.Polyline(points, mirrorX = 0)
             # Pin 1 marker
-            self.draw.MarkerArrow(pin1.x, -fab_height+pitch/2, self.draw.dirS, pitch)
+            self.OpenMarkerArrow(pin1.x, -fab_height+pitch/2, self.draw.dirS, pitch)
         elif variant == "Socket":
             # Outline
             self.draw.Box(0, 0, fab_width, 2*fab_height)
@@ -220,7 +241,7 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
                       (leftEdge + chamfer, -fab_height)]
             self.draw.Polyline(points, mirrorX = 0)
             # Pin 1 marker
-            self.draw.MarkerArrow(pin1.x, fab_height-pitch/2, self.draw.dirN, pitch)
+            self.OpenMarkerArrow(pin1.x, fab_height-pitch/2, self.draw.dirN, pitch)
         
         # Draw bank outlines
         bank_height = self.parameters["Banks"]["height"]
