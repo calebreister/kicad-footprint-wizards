@@ -20,6 +20,9 @@ import copy
 import pcbnew
 from pcbnew import wxPoint
 from pcbnew import wxSize
+from pcbnew import FromMM
+from pcbnew import ToMM
+from pcbnew import PutOnGridMM
 
 import FootprintWizardBase
 
@@ -100,13 +103,10 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         pass
     
     def BuildThisFootprint(self):
-        def putOnGridMM(point, grid):
-            return (pcbnew.PutOnGridMM(point[0], grid),
-                    pcbnew.PutOnGridMM(point[1], grid))
-        
+        # General parameters
         variant = self.parameters["Layout"]["variant"]
         
-        # Banks
+        # Bank parameters
         banks  = self.parameters["Banks"]["banks"]
         diff   = self.parameters["Banks"]["differential"]
         bank_x = self.parameters["Banks"]["spacing"]
@@ -190,14 +190,14 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
 
         ########################################################################
         # Fabrication (F.Fab) layer
-        self.draw.SetLineThickness(pcbnew.FromMM(0.1)) # Default per KLC F5.2
+        self.draw.SetLineThickness(FromMM(0.1)) # Default per KLC F5.2
         self.draw.SetLayer(pcbnew.F_Fab)
                                        
         # Draw connector outline
         fab_width = banks * bank_x
         if variant == "Socket":
             # Sockets are 1.27mm wider in all relevant Q Strip datasheets
-            fab_width = fab_width + pcbnew.FromMM(1.27)
+            fab_width = fab_width + FromMM(1.27)
         
         leftEdge = -fab_width / 2
         fab_height = self.parameters["Layout"]["connector height"] / 2
@@ -228,39 +228,45 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         for b in range(0,banks):
             mid = wxPoint(bank1_mid + b*bank_x, 0)
             self.draw.Box(mid.x, mid.y, bank_width, bank_height)
-
+        
         ########################################################################
         # Silkscreen (F.SilkS) layer
-        self.draw.SetLineThickness(pcbnew.FromMM(0.12)) # KLC5.1, per IPC-7351C
+        self.draw.SetLineThickness(FromMM(0.12)) # KLC5.1, per IPC-7351C
         self.draw.SetLayer(pcbnew.F_SilkS)
-        
+
         # Silkscreen parameters
         silk_offset = self.parameters["Layout"]["silkscreen offset"]
-        silk_grid = pcbnew.ToMM(silk_offset)
+        silk_grid = ToMM(silk_offset)
         silk_height = fab_height + silk_offset
         silk_leftEdge = leftEdge - silk_offset
+        silk_chamfer = chamfer + silk_offset/2
         silk_pin = int(pad_width/2 + silk_offset)
         silk_pin1 = pin1.x - pad_width/2 - silk_offset
-        
-        silkEndL = []
-        silkEndR = []
+
+        silkEndL = [] # Left end outline
+        silkEndR = [] # Right end outline (usually mirrors the left)
         if variant == "Terminal":
-            silkEndL = [wxPoint(silk_pin1, pin1.y - pad_height/2), # Pin 1 mark
-                        wxPoint(silk_pin1, -silk_height),
+            silkEndL = [wxPoint(silk_pin1, -silk_height),
                         wxPoint(silk_leftEdge, -silk_height),
-                        wxPoint(silk_leftEdge, silk_height-chamfer),
-                        wxPoint(silk_leftEdge+chamfer, silk_height),
+                        wxPoint(silk_leftEdge, silk_height - silk_chamfer),
+                        wxPoint(silk_leftEdge + silk_chamfer, silk_height),
                         wxPoint(silk_pin1, silk_height)]
+            # Draw Pin 1 indicator
+            self.draw.Line(silk_pin1, pin1.y - pad_height/2,
+                           silkEndL[0].x, silkEndL[0].y)
         elif variant == "Socket":
-            silkEndL = [wxPoint(silk_pin1, pin1.y + pad_height/2) # Pin 1 mark
-                        wxPoint(silk_pin1, silk_height),
+            silkEndL = [wxPoint(silk_pin1, silk_height),
                         wxPoint(silk_leftEdge, silk_height),
                         wxPoint(silk_leftEdge, -silk_height),
                         wxPoint(silk_pin1, -silk_height)]
+            # Draw Pin 1 indicator
+            r = pad_width // 2
+            y = pin1.y + pad_height/2 + r + silk_offset
+            self.draw.Circle(pin1.x, y, r, True)
         
         # Generate right endpoints:
         # Deep copy and mirror left endpoints about X axis, skip the first point
-        for p in silkEndL[1:]:
+        for p in silkEndL:
             silkEndR.append(wxPoint(-p.x, p.y))
         
         # Define x offset from the last pin:
@@ -285,12 +291,28 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         ########################################################################
         # Courtyard        
         self.draw.SetLayer(pcbnew.F_CrtYd)
-        self.draw.SetLineThickness(pcbnew.FromMM(0.05))
+        self.draw.SetLineThickness(FromMM(0.05))
         
         # Draw courtyard
-        #crtyd_width = self.parameters["Layout"]["courtyard width"]
-        #crtyd_height = self.parameters["Layout"]["courtyard height"]
-        #self.draw.Box(0, 0, crtyd_width, crtyd_height)
+        court_height = PutOnGridMM(2*(pad_y + pad_height/2), 0.01) + FromMM(1)
+        court_width = PutOnGridMM(fab_width, 0.01) + FromMM(1)
+        self.draw.Box(0, 0, court_width, court_height)
+
+        ########################################################################
+        # Text
+        text_size = self.GetTextSize() # IPC nominal
+        text_y = PutOnGridMM(pad_y + pad_height/2 + FromMM(1), 0.5)
+        
+        # Automatically add RefDes and Value fields
+        self.draw.Reference(0, -text_y, text_size)
+        self.draw.Value(0, text_y, text_size)
+
+        # Add reference text to F.Fab
+        ref = self.module.Reference().Duplicate()
+        ref.SetType(ref.TEXT_is_DIVERS)
+        ref.SetText(r"%R")
+        ref.SetLayer(pcbnew.F_Fab)
+        self.module.Add(ref)
         
         self.module.SetAttributes(pcbnew.MOD_CMS)
         
