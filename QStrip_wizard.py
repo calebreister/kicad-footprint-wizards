@@ -40,7 +40,8 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
     def GenerateParameterList(self):
         # Fabrication/silk layer configuration
         self.AddParam("Layout", "variant", r"Terminal,Socket", r"Terminal")
-        self.AddParam("Layout", "connector height", self.uMM, 5.97)
+        self.AddParam("Layout", "width", self.uMM, 60.00)
+        self.AddParam("Layout", "height", self.uMM, 5.97)
         self.AddParam("Layout", "silkscreen offset", self.uMM, 0.25)
         # Pin bank configuration
         self.AddParam("Banks", "banks", self.uInteger, 3)
@@ -60,11 +61,17 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         self.AddParam("Ground Pads", "width (outer)", self.uMM, 2.54)
         self.AddParam("Ground Pads", "spacing (inner)", self.uMM, 6.35)
         self.AddParam("Ground Pads", "spacing (outer)", self.uMM, 16.89)
-        # Hole parameters
-        self.AddParam("Holes", "drill diameter", self.uMM, 1.02)
-        self.AddParam("Holes", "pad diameter", self.uMM, 0.0)
-        self.AddParam("Holes", "x offset", self.uMM, 1.989)
-        self.AddParam("Holes", "y offset", self.uMM, 2.03)
+        # NPTH alignment pin parameters
+        self.AddParam("Alignment Holes", "enable", self.uBool, True)
+        self.AddParam("Alignment Holes", "drill", self.uMM, 1.02)
+        self.AddParam("Alignment Holes", "distance", self.uMM, 58.48)
+        self.AddParam("Alignment Holes", "y offset", self.uMM, 2.03)
+        # PTH latching pin parameters
+        self.AddParam("Locking Pins", "enable", self.uBool, False)
+        self.AddParam("Locking Pins", "drill", self.uMM, 0.81)
+        self.AddParam("Locking Pins", "annular ring", self.uMM, 0.5)
+        self.AddParam("Locking Pins", "distance", self.uMM, 61.7)
+        self.AddParam("Locking Pins", "y offset", self.uMM, 0.5)
         
     # Build a rectangular pad
     def smdRectPad(self,module,name,size,pos):
@@ -79,23 +86,23 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         return pad
 
     # Build a hole
-    def holePad(self,module,name,dia,ring_dia,pos):
+    def holePad(self,module,name,x,y,drill,ring = None):
         pad = pcbnew.D_PAD(module)
         pad.SetShape(pcbnew.PAD_DRILL_SHAPE_CIRCLE)
-        if ring_dia <= dia:
+        if ring == None:
             # NPTH
             pad.SetAttribute(pcbnew.PAD_ATTRIB_HOLE_NOT_PLATED)
             pad.SetLayerSet(pad.UnplatedHoleMask())
-            pad.SetSize(wxSize(dia,dia))
-            pad.SetDrillSize(wxSize(dia,dia))
+            pad.SetSize(wxSize(drill, drill))
+            pad.SetDrillSize(wxSize(drill, drill))
         else:
             # PTH
             pad.SetAttribute(pcbnew.PAD_ATTRIB_STANDARD)
             pad.SetLayerSet(pad.StandardMask())
-            pad.SetSize(wxSize(ring_dia,ring_dia))
-            pad.SetDrillSize(wxSize(dia,dia))
-        pad.SetPos0(pos)
-        pad.SetPosition(pos)
+            pad.SetSize(wxSize(drill+ring, drill+ring))
+            pad.SetDrillSize(wxSize(drill, drill))
+        pad.SetPos0(wxPoint(x,y))
+        pad.SetPosition(wxPoint(x,y))
         pad.SetName(name)
         return pad
 
@@ -125,22 +132,23 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
     
     def BuildThisFootprint(self):
         # General parameters
-        variant = self.parameters["Layout"]["variant"]
+        param = self.parameters
+        variant = param["Layout"]["variant"]
         
         # Bank parameters
-        banks  = self.parameters["Banks"]["banks"]
-        diff   = self.parameters["Banks"]["differential"]
-        bank_x = self.parameters["Banks"]["spacing"]
-        pins_per_bank = self.parameters["Banks"]["pins per bank"]
+        banks  = param["Banks"]["banks"]
+        diff   = param["Banks"]["differential"]
+        bank_x = param["Banks"]["spacing"]
+        pins_per_bank = param["Banks"]["pins per bank"]
 
         ########################################################################
         # Copper layer(s)
         
         # Get signal pad parameters
-        pitch      = self.parameters["Signal Pads"]["pitch"]
-        pad_width  = self.parameters["Signal Pads"]["width"]
-        pad_height = self.parameters["Signal Pads"]["height"]
-        pad_y = self.parameters["Signal Pads"]["y offset"]
+        pitch      = param["Signal Pads"]["pitch"]
+        pad_width  = param["Signal Pads"]["width"]
+        pad_height = param["Signal Pads"]["height"]
+        pad_y = param["Signal Pads"]["y offset"]
         pad_size = wxSize(pad_width, pad_height)
         
         # Pin 1 position
@@ -174,11 +182,11 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
                     n = n + 1
         
         # Ground pad parameters
-        gnd_height    = self.parameters["Ground Pads"]["height"]
-        gnd_width_in  = self.parameters["Ground Pads"]["width (inner)"]
-        gnd_width_out = self.parameters["Ground Pads"]["width (outer)"]
-        gnd_space_in  = self.parameters["Ground Pads"]["spacing (inner)"] / 2
-        gnd_space_out = self.parameters["Ground Pads"]["spacing (outer)"] / 2
+        gnd_height    = param["Ground Pads"]["height"]
+        gnd_width_in  = param["Ground Pads"]["width (inner)"]
+        gnd_width_out = param["Ground Pads"]["width (outer)"]
+        gnd_space_in  = param["Ground Pads"]["spacing (inner)"] / 2
+        gnd_space_out = param["Ground Pads"]["spacing (outer)"] / 2
         gnd_space = [-gnd_space_out, -gnd_space_in, gnd_space_in, gnd_space_out]
         gnd_size  = [wxSize(gnd_width_out, gnd_height),
                      wxSize(gnd_width_in, gnd_height),
@@ -196,18 +204,30 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
 
         ########################################################################
         # Holes
-        hole_dia  = self.parameters["Holes"]["drill diameter"]
-        hole_ring = self.parameters["Holes"]["pad diameter"]
-        hole_offset = wxPoint(self.parameters["Holes"]["x offset"],
-                              self.parameters["Holes"]["y offset"])
-        if variant == "Terminal":
-            hole_offset.y = -hole_offset.y
+        align_drill = param["Alignment Holes"]["drill"]
+        align_pos = wxPoint(param["Alignment Holes"]["distance"] / 2,
+                            param["Alignment Holes"]["y offset"])
         
+        lock_drill = param["Locking Pins"]["drill"]
+        lock_ring = param["Locking Pins"]["annular ring"]
+        lock_pos = wxPoint(param["Locking Pins"]["distance"] / 2,
+                           param["Locking Pins"]["y offset"])
+
+        if variant == "Terminal":
+            align_pos.y = -align_pos.y
+            lock_pos.y = -lock_pos.y
+
         # Place holes
         for m in (-1,1):
-            pos = wxPoint(m*(pin1.x-hole_offset.x), hole_offset.y)
-            hole = self.holePad(self.module, "", hole_dia, hole_ring, pos)
-            self.module.Add(hole)
+            if param["Alignment Holes"]["enable"]:
+                # module,name,x,y,drill,ring = None
+                hole = self.holePad(self.module, "", m*align_pos.x, align_pos.y,
+                                    align_drill)
+                self.module.Add(hole)
+            if param["Locking Pins"]["enable"]:
+                hole = self.holePad(self.module, "MH", m*lock_pos.x, lock_pos.y,
+                                    lock_drill, lock_ring)
+                self.module.Add(hole)
 
         ########################################################################
         # Fabrication (F.Fab) layer
@@ -215,36 +235,38 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         self.draw.SetLayer(pcbnew.F_Fab)
                                        
         # Draw connector outline
-        fab_width = banks * bank_x
-        if variant == "Socket":
-            # Sockets are 1.27mm wider in all relevant Q Strip datasheets
-            fab_width = fab_width + FromMM(1.27)
+        #fab_width = banks * bank_x
+        #if variant == "Socket":
+        #    # Sockets are 1.27mm wider in all relevant Q Strip datasheets
+        #    fab_width = fab_width + FromMM(1.27)
         
+        fab_width = param["Layout"]["width"]
+        fab_height = param["Layout"]["height"]
+        fab_y = fab_height / 2
         leftEdge = -fab_width / 2
-        fab_height = self.parameters["Layout"]["connector height"] / 2
-        chamfer = 2*fab_height / 4 # 1/4 connector height, cosmetic only
+        chamfer = fab_height / 4 # 1/4 connector height, cosmetic only
         
         if variant == "Terminal":
-            points = [(0, -fab_height),
-                      (leftEdge, -fab_height),
-                      (leftEdge, fab_height - chamfer),
-                      (leftEdge + chamfer, fab_height),
-                      (0, fab_height)]
+            points = [(0, -fab_y),
+                      (leftEdge, -fab_y),
+                      (leftEdge, fab_y - chamfer),
+                      (leftEdge + chamfer, fab_y),
+                      (0, fab_y)]
             self.draw.Polyline(points, mirrorX = 0)
             # Pin 1 marker
-            self.OpenMarkerArrow(pin1.x, -fab_height+pitch/2, self.draw.dirS, pitch)
+            self.OpenMarkerArrow(pin1.x, (pitch-fab_height)/2, self.draw.dirS, pitch)
         elif variant == "Socket":
             # Outline
-            self.draw.Box(0, 0, fab_width, 2*fab_height)
+            self.draw.Box(0, 0, fab_width, fab_height)
             # Chamfers
-            points = [(leftEdge, -fab_height + chamfer),
-                      (leftEdge + chamfer, -fab_height)]
+            points = [(leftEdge, -fab_y + chamfer),
+                      (leftEdge + chamfer, -fab_y)]
             self.draw.Polyline(points, mirrorX = 0)
             # Pin 1 marker
-            self.OpenMarkerArrow(pin1.x, fab_height-pitch/2, self.draw.dirN, pitch)
+            self.OpenMarkerArrow(pin1.x, (fab_height-pitch)/2, self.draw.dirN, pitch)
         
         # Draw bank outlines
-        bank_height = self.parameters["Banks"]["height"]
+        bank_height = param["Banks"]["height"]
         bank_width = 2*gnd_space_out # Approximate, ok for cosmetic purposes
         for b in range(0,banks):
             mid = wxPoint(bank1_mid + b*bank_x, 0)
@@ -256,9 +278,9 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         self.draw.SetLayer(pcbnew.F_SilkS)
 
         # Silkscreen parameters
-        silk_offset = self.parameters["Layout"]["silkscreen offset"]
+        silk_offset = param["Layout"]["silkscreen offset"]
         silk_grid = ToMM(silk_offset)
-        silk_height = fab_height + silk_offset
+        silk_y = fab_y + silk_offset
         silk_leftEdge = leftEdge - silk_offset
         silk_chamfer = chamfer + silk_offset/2
         silk_pin = int(pad_width/2 + silk_offset)
@@ -267,19 +289,19 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
         silkEndL = [] # Left end outline
         silkEndR = [] # Right end outline (usually mirrors the left)
         if variant == "Terminal":
-            silkEndL = [wxPoint(silk_pin1, -silk_height),
-                        wxPoint(silk_leftEdge, -silk_height),
-                        wxPoint(silk_leftEdge, silk_height - silk_chamfer),
-                        wxPoint(silk_leftEdge + silk_chamfer, silk_height),
-                        wxPoint(silk_pin1, silk_height)]
+            silkEndL = [wxPoint(silk_pin1, -silk_y),
+                        wxPoint(silk_leftEdge, -silk_y),
+                        wxPoint(silk_leftEdge, silk_y - silk_chamfer),
+                        wxPoint(silk_leftEdge + silk_chamfer, silk_y),
+                        wxPoint(silk_pin1, silk_y)]
             # Draw Pin 1 indicator
             self.draw.Line(silk_pin1, pin1.y - pad_height/2,
                            silkEndL[0].x, silkEndL[0].y)
         elif variant == "Socket":
-            silkEndL = [wxPoint(silk_pin1, silk_height),
-                        wxPoint(silk_leftEdge, silk_height),
-                        wxPoint(silk_leftEdge, -silk_height),
-                        wxPoint(silk_pin1, -silk_height)]
+            silkEndL = [wxPoint(silk_pin1, silk_y),
+                        wxPoint(silk_leftEdge, silk_y),
+                        wxPoint(silk_leftEdge, -silk_y),
+                        wxPoint(silk_pin1, -silk_y)]
             # Draw Pin 1 indicator
             r = pad_width // 2
             y = pin1.y + pad_height/2 + r + silk_offset
@@ -306,8 +328,8 @@ class QStrip_FootprintWizard(FootprintWizardBase.FootprintWizard):
             # First pin in next bank
             x1 = pin[b+1][0].x - pad_width/2 - silk_offset
             # Draw
-            for y in (-silk_height, silk_height):
-                self.draw.Line(x0, y, x1, y)
+            for m in (-1,1):
+                self.draw.Line(x0, m*silk_y, x1, m*silk_y)
 
         ########################################################################
         # Courtyard        
